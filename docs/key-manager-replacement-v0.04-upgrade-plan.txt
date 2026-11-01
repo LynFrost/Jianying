@@ -1,0 +1,248 @@
+# Key Manager Replacement V0.04 Upgrade Plan
+
+## 本次范围
+
+V0.04 计划基于当前 V0.03：
+
+```text
+P:\2607024CX_\key-manager-replacement-v0.03.ahk
+```
+
+确认后再复制为新程序：
+
+```text
+P:\2607024CX_\key-manager-replacement-v0.04.ahk
+```
+
+不覆盖 V0.03。
+
+本次只处理“切换窗口”按钮：
+
+```text
+LCtrl + Numpad . -> 切换窗口
+```
+
+其他映射保持 V0.03 不变。
+
+## 现象
+
+V0.03 去掉了 V0.02 里的 `Esc`，改成了 `Alt-only reset`。实际使用后出现新问题：
+
+```text
+点击“切换窗口”之后，极大概率残留一个“单按了一次 Alt”的状态。
+```
+
+表现可能包括：
+
+```text
+菜单栏被激活
+下一次按字母键变成菜单快捷键
+当前程序像是刚刚按过一次 Alt
+需要再按一次 Alt 或其他操作才恢复正常
+```
+
+## 深层原因
+
+V0.03 的 `SwitchWindow()` 当前逻辑是：
+
+```text
+ReleaseModifiers()
+ResetAltState()
+Alt down
+Tab
+Alt up
+ReleaseModifiers()
+```
+
+其中 `ResetAltState()` 实际做了：
+
+```text
+Alt up
+Alt down
+Alt up
+```
+
+这正好构成 Windows 识别的“单独按了一次 Alt”。
+
+在 Windows 里，单独按下并松开 Alt 不是普通无害动作。它常常会触发应用程序的菜单焦点状态：
+
+```text
+Alt down
+Alt up
+=> 激活菜单栏或进入 Alt 菜单模式
+```
+
+因此 V0.03 的问题不是 Alt 没有释放，而是脚本主动制造了一次“单按 Alt”的语义。后面的 `ReleaseModifiers()` 只能释放按键的 down/up 状态，不能撤销应用程序已经进入的菜单焦点状态。
+
+还有一个隐藏因素：这个热键是 `LCtrl + Numpad .`。触发时，物理 `LCtrl` 很可能仍然按着。如果脚本在 Ctrl 仍被物理按住时发送 `Alt + Tab`，Windows 可能把它理解成接近 `Ctrl + Alt + Tab` 的状态。`Ctrl + Alt + Tab` 本身就是一种更持久的窗口切换状态，也容易让用户感觉像 Alt 残留。
+
+所以 V0.04 要同时解决两个问题：
+
+```text
+1. 不再发送独立的 Alt down/up 复位动作。
+2. 避免在物理 LCtrl 仍按住时发送 Alt + Tab。
+```
+
+## V0.04 推荐方案
+
+V0.04 不再使用 `ResetAltState()`，也不使用 `Esc`。
+
+改成“释放触发后再切换”的方案：
+
+```text
+1. 用户按下 LCtrl + Numpad .
+2. 脚本先等待 Numpad . 松开。
+3. 脚本再等待 LCtrl 松开。
+4. 确认触发键和物理 Ctrl 都松开后，进入 Critical 防重入。
+5. 释放所有逻辑修饰键。
+6. 直接发送一次干净的 Alt down -> Tab -> Alt up。
+7. 再释放所有逻辑修饰键。
+8. 退出 Critical。
+```
+
+概念流程：
+
+```text
+SwitchWindow(waitKey := "") {
+    if waitKey {
+        KeyWait waitKey
+    }
+
+    KeyWait "LCtrl"
+
+    Critical "On"
+    ReleaseModifiers()
+    Sleep 20
+    SendEvent "{LAlt down}"
+    Sleep 30
+    SendEvent "{Tab}"
+    Sleep 30
+    SendEvent "{LAlt up}"
+    Sleep 30
+    ReleaseModifiers()
+    Critical "Off"
+}
+```
+
+这个方案的关键点：
+
+```text
+不发 Esc
+不发单独 Alt tap
+不在 Ctrl 物理按下时发送 Alt + Tab
+仍保留真正的 Alt + Tab 切换效果
+```
+
+## 为什么这个方案能去掉副作用
+
+V0.03 的副作用来自这段独立 Alt：
+
+```text
+Alt down
+Alt up
+```
+
+V0.04 删除它。这样脚本不会再主动触发“单按 Alt 激活菜单栏”的 Windows 行为。
+
+同时，V0.04 等待 `LCtrl` 物理松开后再发送 `Alt + Tab`，可以避免 `LCtrl` 混入窗口切换动作，降低被系统解释成 `Ctrl + Alt + Tab` 或其他复杂状态的概率。
+
+## 可能产生的新副作用
+
+### 1. 切换时机从“按下瞬间”变为“松开后”
+
+因为 V0.04 会等待 `Numpad .` 和 `LCtrl` 松开，所以窗口切换会发生在手指松开之后。
+
+影响：
+
+```text
+稳定性更好
+体感上可能慢一点点
+如果一直按着 LCtrl 不松开，切换会等待
+```
+
+这是本方案最主要的体验变化。
+
+### 2. 不能靠长按触发连续切换
+
+V0.04 会避免按键自动重复。这样更稳定，但如果你原本想长按 `LCtrl + Numpad .` 连续切窗口，这个行为会减少或消失。
+
+从当前需求看，这通常是好事，因为连续触发正是 Alt 状态错乱的来源之一。
+
+### 3. 不再主动清除已有菜单状态
+
+V0.04 不用 `Esc`，也不单按 Alt，因此它不会主动关闭当前程序已有的菜单、下拉框、输入法候选、命令面板。
+
+影响：
+
+```text
+优点：不会误关当前界面
+代价：如果某个程序本来已经处于菜单焦点状态，V0.04 不会专门帮它取消
+```
+
+这符合“去掉 Esc 副作用”的目标。
+
+### 4. 仍然受 Windows 权限边界影响
+
+如果当前或目标窗口是管理员权限运行，而脚本不是管理员权限，Windows 可能限制按键发送或窗口切换行为。
+
+这个问题不是 V0.04 独有，也不是 Alt 方案本身能完全解决的。
+
+### 5. 少数远程桌面或虚拟机窗口可能行为不同
+
+远程桌面、虚拟机、游戏、全屏程序可能拦截 `Alt + Tab`。V0.04 仍然使用真实的 `Alt + Tab`，所以这些场景可能继续由目标程序决定行为。
+
+## 备选方案
+
+如果 V0.04 的“松开后 Alt + Tab”仍不稳定，下一步可以考虑完全不用 Alt：
+
+```text
+枚举当前可见窗口
+找到 Z 顺序里的下一个普通窗口
+用 WinActivate 激活它
+```
+
+这个方案可以彻底避免 Alt 状态，但副作用也更大：
+
+```text
+不一定完全等同 Windows Alt + Tab 的 MRU 顺序
+可能跳过某些特殊窗口
+可能不显示 Alt-Tab 切换界面
+对最小化窗口、UWP 窗口、虚拟桌面窗口的处理更复杂
+```
+
+因此 V0.04 暂不建议直接走这个路线。当前更推荐先做最小改动：删除独立 Alt tap，并把切换延后到物理 Ctrl 松开之后。
+
+## 实施计划
+
+确认后执行：
+
+```text
+1. 复制 key-manager-replacement-v0.03.ahk 为 key-manager-replacement-v0.04.ahk。
+2. 只修改 V0.04，旧版不动。
+3. 将 Version 从 V0.03 改为 V0.04。
+4. 删除 ResetAltState()。
+5. 从 SwitchWindow() 中移除 ResetAltState() 调用。
+6. 在 SwitchWindow() 开头等待 Numpad . 松开。
+7. 在 SwitchWindow() 中等待 LCtrl 松开后再发送 Alt + Tab。
+8. 保留 Critical、慢速 SendEvent、ReleaseModifiers()。
+9. 做 AutoHotkey v2 加载检查，但不让脚本常驻运行。
+```
+
+## 测试清单
+
+V0.04 生成后建议测试：
+
+```text
+1. 正常按 LCtrl + Numpad .，松开后是否切换窗口。
+2. 切换后是否还会出现单按 Alt 的菜单焦点状态。
+3. 先手动按一下 Alt 再松开，再按 LCtrl + Numpad .，是否仍能切换。
+4. 在输入框、下拉框、菜单、输入法候选存在时切换，确认不会像 Esc 一样取消内容。
+5. 快速连续点几次切换窗口按钮，确认不会残留 Alt。
+6. 切换后再按 Numpad 9/8/7，确认 Win + 数字映射仍正常。
+```
+
+## 推荐结论
+
+V0.04 建议采用“松开触发键和 LCtrl 后，再发送干净 Alt + Tab”的方案。
+
+这个方案会带来轻微的触发延后，但可以去掉 V0.03 中由 `ResetAltState()` 引入的“单按 Alt”副作用，也避免重新引入 V0.02 的 `Esc` 副作用。

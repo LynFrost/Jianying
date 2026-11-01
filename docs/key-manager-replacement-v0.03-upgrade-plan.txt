@@ -1,0 +1,162 @@
+# Key Manager Replacement V0.03 Upgrade Plan
+
+## Scope
+
+V0.03 will be based on:
+
+```text
+P:\2607024CX_\key-manager-replacement-v0.02.ahk
+```
+
+The planned new program file is:
+
+```text
+P:\2607024CX_\key-manager-replacement-v0.03.ahk
+```
+
+V0.02 will not be overwritten.
+
+This upgrade only targets the window-switching hotkey:
+
+```text
+LCtrl + Numpad . -> switch window
+```
+
+All other mappings from V0.02 should remain unchanged unless testing shows a direct conflict.
+
+## Current V0.02 Behavior
+
+V0.02 uses a dedicated `SwitchWindow()` function. Its current strategy is:
+
+```text
+Release modifiers
+Send Esc
+Send Alt down
+Send Tab
+Send Alt up
+Release modifiers again
+Wait for Numpad . to be released
+```
+
+The `Esc` before `Alt + Tab` was added to clear the Windows/program menu state caused by a previous standalone `Alt` press.
+
+## Problem
+
+The pre-switch `Esc` does help clear the stale Alt/menu state, but it has a large side effect:
+
+```text
+If the current application has an open dialog, menu, dropdown, IME candidate window, command palette, search box, or selection mode,
+Esc may close or cancel it before the window switch happens.
+```
+
+This means the hotkey is no longer a pure "switch window" action. It can unexpectedly alter the current application's state.
+
+## Deeper Cause
+
+`Alt + Tab` is not a normal shortcut like `Ctrl + C`. It is handled by Windows Shell and involves several independent states:
+
+```text
+Physical key state:
+Whether the user's actual Alt/Ctrl keys are pressed.
+
+Synthetic key state:
+Whether AutoHotkey has sent Alt down/up, Ctrl down/up, etc.
+
+Application menu state:
+Many Windows apps enter menu-focus mode after a standalone Alt press.
+
+Shell Alt-Tab state:
+Windows may show or prepare the Alt-Tab switcher while Alt is logically held.
+```
+
+The failure after "press Alt once, release it, then click the switch-window button" is usually caused by the application menu state or Shell Alt state not being fully neutral. V0.02 clears this with `Esc`, but `Esc` is a broad cancellation key, so it can affect unrelated UI.
+
+The better fix is to stop using `Esc` as a general cleanup tool and instead perform a more controlled Alt-state reset before sending Alt-Tab.
+
+## V0.03 Proposed Strategy
+
+Replace the `Esc` cleanup with an Alt-only normalization sequence.
+
+The planned `SwitchWindow()` behavior:
+
+```text
+1. Enter Critical mode to prevent re-entry while switching.
+2. Wait until the physical LCtrl trigger is no longer repeating.
+3. Release all synthetic modifiers.
+4. Send a short, explicit Alt up/down/up reset sequence without Esc.
+5. Use SendEvent to send Alt down -> Tab -> Alt up with small delays.
+6. Release all modifiers again.
+7. Wait for Numpad . to be released.
+```
+
+Conceptual sequence:
+
+```text
+ReleaseModifiers()
+SendEvent "{LAlt up}{RAlt up}"
+Sleep 20
+SendEvent "{LAlt down}"
+Sleep 20
+SendEvent "{LAlt up}"
+Sleep 30
+SendEvent "{LAlt down}"
+Sleep 30
+SendEvent "{Tab}"
+Sleep 30
+SendEvent "{LAlt up}"
+Sleep 30
+ReleaseModifiers()
+KeyWait "NumpadDot"
+```
+
+Why this should reduce the problem:
+
+```text
+It avoids Esc, so it should not close dialogs, menus, dropdowns, or IME UI.
+It explicitly releases Alt before switching.
+It gives Windows a small delay to process Alt state changes.
+It keeps the actual Alt-Tab operation slow and ordered.
+It avoids multiple overlapping switch attempts.
+```
+
+## Optional Fallback
+
+If the Alt-only reset still fails in testing, add a second hotkey path internally:
+
+```text
+First attempt: Alt-only reset, no Esc.
+Fallback only when needed: stronger reset using Ctrl/Alt release plus a very short delay.
+```
+
+I do not recommend keeping automatic `Esc` in V0.03. If needed later, it should become a separate emergency recovery hotkey, not part of normal window switching.
+
+## Implementation Plan After Confirmation
+
+After confirmation, execute these steps:
+
+```text
+1. Copy key-manager-replacement-v0.02.ahk to key-manager-replacement-v0.03.ahk.
+2. Change Version from V0.02 to V0.03.
+3. Remove SendEvent "{Esc}" from SwitchWindow().
+4. Add an Alt-only reset helper, for example ResetAltState().
+5. Update SwitchWindow() to call ResetAltState() before sending Alt + Tab.
+6. Keep Critical mode, delayed SendEvent, ReleaseModifiers(), and KeyWait.
+7. Run an AutoHotkey v2 load check only; do not leave the script running.
+```
+
+## Testing Checklist
+
+After V0.03 is created, test:
+
+```text
+1. Normal LCtrl + Numpad . window switching.
+2. Press Alt once, release it, then press LCtrl + Numpad .
+3. Use LCtrl + Numpad . while a text cursor is active.
+4. Use LCtrl + Numpad . while a dropdown/menu/search box is open.
+5. Confirm no unwanted Esc-like cancellation occurs.
+6. Confirm Alt does not remain logically stuck after switching.
+```
+
+## Recommendation
+
+Proceed with V0.03 using the Alt-only reset strategy and remove `Esc` from normal window switching.

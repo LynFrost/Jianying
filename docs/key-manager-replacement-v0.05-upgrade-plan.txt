@@ -1,0 +1,205 @@
+# Key Manager Replacement V0.05 Upgrade Plan
+
+## 本次范围
+
+V0.05 计划基于当前 V0.04：
+
+```text
+P:\2607024CX_\key-manager-replacement-v0.04.ahk
+```
+
+确认执行后再复制为新程序：
+
+```text
+P:\2607024CX_\key-manager-replacement-v0.05.ahk
+```
+
+不覆盖 V0.04。
+
+本次只处理“切换窗口”按钮：
+
+```text
+LCtrl + Numpad . -> 系统 Alt+Tab 切换窗口
+```
+
+快捷键不变。
+
+## 当前问题
+
+V0.04 仍然使用手写按键序列实现窗口切换：
+
+```text
+等待 Numpad . 松开
+等待 LCtrl 松开
+发送 Alt down
+发送 Tab
+发送 Alt up
+释放修饰键
+```
+
+相比 V0.03，V0.04 已经减少了 Alt 残留概率，但仍然不能彻底避免。
+
+## 深层原因
+
+`Alt+Tab` 是 Windows Shell 级窗口切换动作，不是普通应用快捷键。
+
+手写序列：
+
+```text
+Alt down -> Tab -> Alt up
+```
+
+存在事件归属不一致的问题：
+
+```text
+Alt down 可能被当前窗口感知
+Tab 可能被 Windows Shell 消费
+窗口焦点可能在过程中切换
+Alt up 可能由切换后的窗口或 Shell 处理
+```
+
+因此应用看到的结果可能接近：
+
+```text
+用户单独按了一次 Alt
+```
+
+这会激活菜单栏或进入 Alt 菜单焦点状态。后续再发送 `Alt up` 只能释放按键状态，不能保证撤销应用已经进入的菜单状态。
+
+所以，在继续使用系统 Alt+Tab 的前提下，不应继续手写 `Alt down -> Tab -> Alt up`。
+
+## V0.05 方案
+
+改用 AutoHotkey 的 AltTab 特殊热键动作。
+
+优先写法：
+
+```ahk
+<^NumpadDot::AltTab
+```
+
+含义：
+
+```text
+<^          = 左 Ctrl
+NumpadDot  = 小键盘 .
+AltTab     = AutoHotkey 内建的系统 Alt+Tab 动作
+```
+
+这仍然是原来的快捷键：
+
+```text
+LCtrl + Numpad .
+```
+
+快捷键不改。
+
+V0.05 将不再对这条热键调用 `SwitchWindow()`，也不再手写：
+
+```text
+SendEvent "{LAlt down}"
+SendEvent "{Tab}"
+SendEvent "{LAlt up}"
+```
+
+## 为什么这个方案更合适
+
+AutoHotkey 对 AltTab 类热键有专门处理，不等同于普通 `Send`。
+
+预期收益：
+
+```text
+不再手动制造 Alt down/up 分离问题
+不发送 Esc，不取消当前 UI 状态
+不发送独立 Alt tap，不激活菜单栏
+保留系统 Alt+Tab 的原生切换行为
+快捷键保持 LCtrl + Numpad .
+```
+
+## 副作用评估
+
+### 1. 行为更接近原生 Alt+Tab
+
+这是预期目标。快速点按会切到上一个窗口。
+
+可能表现：
+
+```text
+短暂显示系统 Alt+Tab 界面
+切换逻辑由 Windows Shell 决定
+```
+
+这与当前需求不冲突。
+
+### 2. 按住时可能进入连续切换逻辑
+
+使用 AHK 的 `AltTab` 特殊动作后，如果长按或重复触发，行为可能更接近系统 Alt+Tab。
+
+当前需求是点按切换两个最近窗口，不依赖长按循环选择，因此这个副作用可接受。
+
+### 3. 特殊环境仍可能不完全受控
+
+以下场景仍可能由 Windows 或目标程序接管：
+
+```text
+管理员权限窗口
+远程桌面
+虚拟机
+全屏程序
+游戏
+安全输入窗口
+```
+
+这不是 V0.05 独有问题，而是系统 Alt+Tab 本身的边界。
+
+### 4. 如果 `<^NumpadDot::AltTab` 语法不被当前 AHK v2 接受
+
+优先目标仍然不变：快捷键必须保持 `LCtrl + Numpad .`。
+
+如果加载检查不通过，不直接改成其他行为；先停止并反馈，再确认替代写法。
+
+备选写法可能是：
+
+```ahk
+LCtrl & NumpadDot::AltTab
+```
+
+但该写法可能影响 `LCtrl` 作为普通 Ctrl 的手感，因此不作为首选，不会未经确认采用。
+
+## 实施计划
+
+确认后执行：
+
+```text
+1. 复制 key-manager-replacement-v0.04.ahk 为 key-manager-replacement-v0.05.ahk。
+2. 只修改 V0.05，旧版不动。
+3. 将 Version 从 V0.04 改为 V0.05。
+4. 将 <^NumpadDot::SwitchWindow("NumpadDot") 改为 <^NumpadDot::AltTab。
+5. 保留 SwitchWindow() 函数也可以，或删除未使用函数；建议删除，避免误用旧逻辑。
+6. 其他映射保持 V0.04 不变。
+7. 做 AutoHotkey v2 加载检查，但不让脚本常驻运行。
+8. 如果 `<^NumpadDot::AltTab` 校验失败，停止并反馈，不擅自改快捷键。
+```
+
+## 测试清单
+
+V0.05 生成后建议测试：
+
+```text
+1. 点按 LCtrl + Numpad . 是否切换到上一个窗口。
+2. 连续点按是否在两个最近窗口之间切换。
+3. 切换后是否还出现单按 Alt 的菜单焦点状态。
+4. 切换后 Numpad 9/8/7 的 Win+数字映射是否正常。
+5. 手动按一下 Alt 后，再按 LCtrl + Numpad . 是否仍稳定。
+6. 在输入框、下拉框、菜单、输入法候选存在时测试，确认没有 Esc 型取消副作用。
+```
+
+## 推荐结论
+
+V0.05 推荐使用：
+
+```ahk
+<^NumpadDot::AltTab
+```
+
+这是在保持系统 Alt+Tab 和保持快捷键 `LCtrl + Numpad .` 不变的前提下，最合理的 Alt 残留优化方案。
