@@ -37,7 +37,7 @@ SetTimer, CloseWelcome, -3000
 isSwitcherActive := false
 
 ; 主切换热键
-*Numpad0::
+*NumpadDot::
     if (!isSwitcherActive) {
         Send {Alt down}{Tab}
         isSwitcherActive := true
@@ -45,6 +45,8 @@ isSwitcherActive := false
         Hotkey, *~LButton, HandleLButton, On
         Hotkey, *~Enter, HandleEnter, On
         Hotkey, *~NumpadEnter, HandleNumpadEnter, On
+        Send {Enter}
+        ReleaseAlt()
     } else {
         ReleaseAlt()
     }
